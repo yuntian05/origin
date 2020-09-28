@@ -4,15 +4,19 @@ all: MBR LOADER
 
 .PHONY:MBR
 MBR:
-	nasm -f bin ./boot/MBR.s -o ./boot/MBR.bin
-	dd if=./boot/MBR.bin of=Origin.img seek=0
+	nasm -f bin -i ./src/boot/include/ ./src/boot/boot.asm -o ./boot.bin
+	dd if=./boot.bin of=Origin.img  bs=512 count=1 conv=notrunc
 .PHONY:LOADER
-LOADER:
-	nasm -f bin ./boot/LOADER.s -o ./boot/LOADER.bin
-	dd if=./boot/LOADER.bin of=Origin.img seek=1
+#LOADER:
+#	nasm -f bin ./boot/LOADER.s -o ./boot/LOADER.bin
+#	dd if=./boot/LOADER.bin of=Origin.img seek=1
 .PHONY:run
 run:
-	qemu -S Origin.img -monitor stdio
+	qemu   Origin.img -monitor stdio
 .PHONY:qemu
 qemu:
-	qemu -S Origin.img -monitor stdio
+	qemu  Origin.img -monitor stdio
+qemu-gdb:
+	qemu -s -S Origin.img -monitor stdio
+bochs:
+	bochs

@@ -1,9 +1,11 @@
-;%deine _BOOT_DEBUG_ ;做 Boot Sector 时一定将此行注释掉!将此行打开后用 nasm Boot.asm -o Boot.com 做成一个.COM文件易于调试
+; 加载FlyanxOS的第一步: boot　其做一些系统的初始化工作,然后寻找启动盘中的Loader,并加载它,使命完成
 
-%ifdef _BOOT_DEBUG_ 
-    org 0x0100
+;%define	_BOOT_DEBUG_	; 做 Boot Sector 时一定将此行注释掉!将此行打开后用 nasm Boot.asm -o Boot.com 做成一个.COM文件易于调试
+
+%ifdef	_BOOT_DEBUG_
+	org  0100h			; 调试状态, 做成 .COM 文件, 可调试
 %else
-    org 0x7c00
+	org  07c00h			; Boot 状态, Bios 将把 Boot Sector 加载到 0:7C00 处并开始执行
 %endif
 
 ;================================================================================================
@@ -13,10 +15,8 @@
     BaseOfStack		equ	07c00h	; Boot状态下堆栈基地址(栈底, 从这个位置向低地址生长)
 %endif
 
-;loader加载的段地址
-LOADER_SEG  equ 0x9000
-;loader加载的偏移地址
-LOADER_OFFSET   equ 0x100
+; 导入 Loader 加载文件的相关信息
+%include    "load.inc"
 ;================================================================================================
 
 	jmp short LABEL_START		; Start to boot.
@@ -24,101 +24,135 @@ LOADER_OFFSET   equ 0x100
 
 ; 下面是 FAT12 磁盘的头, 之所以包含它是因为下面用到了磁盘的一些信息
 %include	"fat12hdr.inc"
-;================================================================================================
-;程序入口
-;----------------------------------------------------------------------------
+
 LABEL_START:
-    ;寄存器复位
-    mov ax, cs
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov sp, BaseOfStack
-    
+	mov	ax, cs
+	mov	ds, ax
+	mov	es, ax
+	mov	ss, ax
+	mov	sp, BaseOfStack
+
 	; 清屏,清理BIOS的输出
 	mov	ax, 0600h		; AH = 6,  AL = 0h
 	mov	bx, 0700h		; 黑底白字(BL = 07h)
 	mov	cx, 0			; 左上角: (0, 0)
 	mov	dx, 0184fh		; 右下角: (80, 50)
 	int	10h				; int 10h	
-
-    ;显示字符串 "Booting....."
+    
 	mov	dh, 0			; "Booting  "
 	call	DispStr		; 显示字符串
-	
-    ; 操作软盘前，先将软区复位
+
 	xor	ah, ah	; ┓
 	xor	dl, dl	; ┣ 软驱复位
 	int	13h		; ┛
+	
+; 下面在 A 盘的根目录寻找 LOADER.BIN
+	mov	word [wSectorNo], SectorNoOfRootDirectory
+LABEL_SEARCH_IN_ROOT_DIR_BEGIN:
+	cmp	word [wRootDirSizeForLoop], 0	; ┓
+	jz	LABEL_NO_LOADERBIN				; ┣ 判断根目录区是不是已经读完
+	dec	word [wRootDirSizeForLoop]		; ┛ 如果读完表示没有找到 LOADER.BIN
+	mov	ax, LOADER_SEG
+	mov	es, ax				; es <- LOADER_SEG
+	mov	bx, LOADER_OFFSET	; bx <- LOADER_OFFSET	于是, es:bx = LOADER_SEG:LOADER_OFFSET
+	mov	ax, [wSectorNo]		; ax <- Root Directory 中的某 Sector 号
+	mov	cl, 1
+	call	ReadSector
 
-    ;接下来在软盘A中寻找文件 loader.bin ="LOADER  BIN" 11个字节
-    mov word [wSector], SectorNoOfRootDirectory ;读取软盘的根目录扇区号
-SEARCH_FILE_IN_ROUT_DIR_BEGIN:
-    cmp word [wRootDirSizeLoop], 0
-    jz NO_FILE                      ;读完了整个根目录扇区都没找到，所以没有
-    dec word [wRootDirSizeLoop]     ;wRootDirSizeLoop--
+	mov	si, LoaderFileName	; ds:si -> "LOADER  BIN"
+	mov	di, LOADER_OFFSET	; es:di -> LOADER_SEG:0100 = LOADER_SEG*10h+100
+	cld
+	mov	dx, 10h
+LABEL_SEARCH_FOR_LOADERBIN:
+	cmp	dx, 0										; ┓循环次数控制,
+	jz	LABEL_GOTO_NEXT_SECTOR_IN_ROOT_DIR			; ┣如果已经读完了一个 Sector,
+	dec	dx											; ┛就跳到下一个 Sector
+	mov	cx, 11
+LABEL_CMP_FILENAME:
+	cmp	cx, 0
+	jz	LABEL_FILENAME_FOUND	; 如果比较了 11 个字符都相等, 表示找到
+    dec	cx
+	lodsb				; ds:si -> al
+	cmp	al, byte [es:di]
+	jz	LABEL_GO_ON
+	jmp	LABEL_DIFFERENT		; 只要发现不一样的字符就表明本 DirectoryEntry 不是
+							; 我们要找的 LOADER.BIN
+LABEL_GO_ON:
+	inc	di
+	jmp	LABEL_CMP_FILENAME	;	继续循环
 
-    ;读取扇区
-    mov ax, [wSector]
-    mov cl, 1
-    mov ax, LOADER_SEG
-    mov es, ax
-    mov bx, LOADER_OFFSET
-    call ReadSector
-    
-    
-    mov si, LoaderFileName      ; ds:si -> Loader的文件名称
-    mov di, LOADER_OFFSET       ; es:di -> LOADER_SEG:LOADER_OFFSET -> 加载到内存中的扇区数据
-    cld                         ;字符串比较方向,si,di方向向右
+LABEL_DIFFERENT:
+	and	di, 0FFE0h						; else ┓	di &= E0 为了让它指向本条目开头
+	add	di, 20h							;      ┃
+	mov	si, LoaderFileName				;      ┣ di += 20h  下一个目录条目
+	jmp	LABEL_SEARCH_FOR_LOADERBIN		;      ┛
 
-    ; 开始在扇区中寻找文件，比较文件名
-    mov dx, 16                  ; 一个扇区512字节，FAT目录项是32位，512/32=16
-SEARCH_FOR_FILE:
-    cmp dx, 0
-    jz NEXT_SECTOR_IN_ROOT_DIR  ; 读完整个扇区，依旧没找到，准备加载下一个扇区
-    dec dx                      ; dx--
-    ;应该开始比较目录项中的文件名
-    mov cx, 11
-CMP_FILE_NAME:
-    cmp cx, 0
-    jz FILE_NAME_FOUND          ;cx =0, 整个文件名里的字符都匹配上了，
-    dec cx                      ;cx--
-    loadsb                      ; ds:si -> al, si++ load string byte
+LABEL_GOTO_NEXT_SECTOR_IN_ROOT_DIR:
+	add	word [wSectorNo], 1
+	jmp	LABEL_SEARCH_IN_ROOT_DIR_BEGIN
 
-    cmp al, byte [es:di]        ; 比较字符
-    je GO_ON                    ; 字符相同，准备比较下一个
-    jmp DIFFER_ENT              ; 只要有一个字符不相同，就表面本目录项不是我们要找的文件的目录项
+LABEL_NO_LOADERBIN:
+	mov	dh, 2			; "No LOADER."
+	call	DispStr		; 显示字符串
+%ifdef	_BOOT_DEBUG_
+	mov	ax, 4c00h		; ┓
+	int	21h				; ┛没有找到 LOADER.BIN, 回到 DOS
+%else
+	jmp	$				; 没有找到 LOADER.BIN, 死循环在这里
+%endif
 
-GO_ON:
-    inc di
-    jmp CMP_FILE_NAME
+LABEL_FILENAME_FOUND:			; 找到 LOADER.BIN 后便来到这里继续
+	mov	ax, RootDirSectors
+	and	di, 0FFE0h				; di -> 当前条目的开始
+	add	di, 01Ah				; di -> 首 Sector
+	mov	cx, word [es:di]
+	push	cx					; 保存此 Sector 在 FAT 中的序号
+	add	cx, ax
+	add	cx, DeltaSectorNo		; 这句完成时 cl 里面变成 LOADER.BIN 的起始扇区号 (从 0 开始数的序号)
+	mov	ax, LOADER_SEG
+	mov	es, ax					; es <- LOADER_SEG
+	mov	bx, LOADER_OFFSET		; bx <- LOADER_OFFSET	于是, es:bx = LOADER_SEG:LOADER_OFFSET = LOADER_SEG * 10h + LOADER_OFFSET
+	mov	ax, cx					; ax <- Sector 号
 
-DIFFER_ENT:
-    and di, 0xfff0              ; di &= f0, 1111 1111 1111 0000 是为了让它指向本目录项条目的开始
-    add di, 32                  ; 让di指向下一个目录项
-    mov si, LoaderFileName
-    jmp SEARCH_FOR_FILE         ; 重新开始在下一个目录项中查找文件并比较
+LABEL_GOON_LOADING_FILE:
+	push	ax			; ┓
+	push	bx			; ┃
+	mov ah, 0Eh		; # 每读一个扇区就在　"Loading   "加符号 '.'
+	mov al, '.'		; #
+	mov bl, 0Fh		; # 效果：Loading ......
+	int	10h			    ; ┃
+	pop	bx			    ; ┃
+	pop	ax			    ; ┛
 
-NEXT_SECTOR_IN_ROOT_DIR:
-    add word [wSector], 1       ; 准备开始读下一个扇区
-    jmp SEARCH_FILE_IN_ROUT_DIR_BEGIN
+	mov	cl, 1
+	call	ReadSector
+	pop	ax				; 取出此 Sector 在 FAT 中的序号
+	call	GetFATEntry
+	cmp	ax, 0FFFh
+	jz	LABEL_FILE_LOADED
+	push	ax			; 保存 Sector 在 FAT 中的序号
+	mov	dx, RootDirSectors
+	add	ax, dx
+	add	ax, DeltaSectorNo
+	add	bx, [BPB_BytsPerSec]
+	jmp	LABEL_GOON_LOADING_FILE
+LABEL_FILE_LOADED:
 
-FILE_NAME_FOUND:
-    mov dh, 1
-    call DispStr    ;打印Found  it
-    ;死循环
-    jmp $
-
-NO_FILE:
-    mov dh, 2
-    call DispStr    ;打印No LOADER
-    ;死循环
-    jmp $
+	mov	dh, 1			    ; "Found  it!!!
+	call	DispStr			; 显示字符串
+; *****************************************************************************************************
+	jmp	LOADER_SEG:LOADER_OFFSET	; 这一句正式跳转到已加载到内存中的 LOADER.BIN 的开始处
+						; 开始执行 LOADER.BIN 的代码
+						; Boot Sector 的使命到此结束
+; *****************************************************************************************************
 
 ;============================================================================
-;存放变量
-wRootDirSizeLoop dw RootDirSectors  ;根目录占用的扇区数，在循环中将被逐步递减至0
-wSector          dw 0               ; 要读取的扇区号
+;变量
+;----------------------------------------------------------------------------
+wRootDirSizeForLoop	dw	RootDirSectors	; Root Directory 占用的扇区数, 在循环中会递减至零.
+wSectorNo		dw	0		; 要读取的扇区号
+bOdd			db	0		; 奇数还是偶数
+
 ;============================================================================
 ;字符串
 ;----------------------------------------------------------------------------
@@ -129,6 +163,7 @@ BootMessage:		db	"Booting....."  ; 12字节, 不够则用空格补齐. 序号 0
 Message1		    db	"Found  it!!!"  ; 12字节, 不够则用空格补齐. 序号 1
 Message2		    db	"No LOADER!!!"  ; 12字节, 不够则用空格补齐. 序号 2
 ;============================================================================
+
 
 ;----------------------------------------------------------------------------
 ; 函数名: DispStr
@@ -149,6 +184,7 @@ DispStr:
 	int	10h			; int 10h
 	ret
 
+
 ;----------------------------------------------------------------------------
 ; 函数名: ReadSector
 ;----------------------------------------------------------------------------
@@ -164,6 +200,7 @@ ReadSector:
 	; -------------- => ┤      └ 磁头号 = y & 1
 	;  每磁道扇区数     │
 	;                   └ 余 z => 起始扇区号 = z + 1
+	
 	push	bp
 	mov	bp, sp
 	sub	esp, 2			; 辟出两个字节的堆栈区域保存要读的扇区数: byte [bp-2]
@@ -182,15 +219,63 @@ ReadSector:
 	; 至此, "柱面号, 起始扇区, 磁头号" 全部得到 ^^^^^^^^^^^^^^^^^^^^^^^^
 	mov	dl, [BS_DrvNum]		; 驱动器号 (0 表示 A 盘)
 .GoOnReading:
-    mov ah, 2
-    mov al, byte [bp - 2]   ;读al个扇区
-    int 0x13
-    jc .GoOnReading         ;如果读取错误CF会被置为1，
-                            ;这时就不停地读，直到正确为止
-    add esp, 2
-    pop bp
+	mov	ah, 2				; 读
+	mov	al, byte [bp-2]		; 读 al 个扇区
+	int	13h
+	jc	.GoOnReading		; 如果读取错误 CF 会被置为 1, 这时就不停地读, 直到正确为止
 
-    ret
+	add	esp, 2
+	pop	bp
 
-times 510 - ($ - $$) db 0
-dw 0xaa55
+	ret
+
+;----------------------------------------------------------------------------
+; 函数名: GetFATEntry
+;----------------------------------------------------------------------------
+; 作用:
+;	找到序号为 ax 的 Sector 在 FAT 中的条目, 结果放在 ax 中
+;	需要注意的是, 中间需要读 FAT 的扇区到 es:bx 处, 所以函数一开始保存了 es 和 bx
+GetFATEntry:
+	push	es
+	push	bx
+	push	ax
+	mov	ax, LOADER_SEG	; ┓
+	sub	ax, 0100h		; ┣ 在 LOADER_SEG 后面留出 4K 空间用于存放 FAT
+	mov	es, ax			; ┛
+	pop	ax
+	mov	byte [bOdd], 0
+	mov	bx, 3
+	mul	bx			; dx:ax = ax * 3
+	mov	bx, 2
+	div	bx			; dx:ax / 2  ==>  ax <- 商, dx <- 余数
+	cmp	dx, 0
+	jz	LABEL_EVEN
+	mov	byte [bOdd], 1
+LABEL_EVEN:;偶数
+	xor	dx, dx			; 现在 ax 中是 FATEntry 在 FAT 中的偏移量. 下面来计算 FATEntry 在哪个扇区中(FAT占用不止一个扇区)
+	mov	bx, [BPB_BytsPerSec]
+	div	bx			; dx:ax / BPB_BytsPerSec  ==>	ax <- 商   (FATEntry 所在的扇区相对于 FAT 来说的扇区号)
+					;				dx <- 余数 (FATEntry 在扇区内的偏移)。
+	push	dx
+	mov	bx, 0			; bx <- 0	于是, es:bx = (LOADER_SEG - 100):00 = (LOADER_SEG - 100) * 10h
+	add	ax, SectorNoOfFAT1	; 此句执行之后的 ax 就是 FATEntry 所在的扇区号
+	mov	cl, 2
+	call	ReadSector		; 读取 FATEntry 所在的扇区, 一次读两个, 避免在边界发生错误, 因为一个 FATEntry 可能跨越两个扇区
+	pop	dx
+	add	bx, dx
+	mov	ax, [es:bx]
+	cmp	byte [bOdd], 1
+	jnz	LABEL_EVEN_2
+	shr	ax, 4
+LABEL_EVEN_2:
+	and	ax, 0FFFh
+
+LABEL_GET_FAT_ENRY_OK:
+
+	pop	bx
+	pop	es
+	ret
+;----------------------------------------------------------------------------
+
+times 	510-($-$$)	db	0	; 填充剩下的空间，使生成的二进制代码恰好为512字节
+dw 	0xaa55				    ; 可引导扇区结束标志，必须是55aa，不然 BIOS 无法识别
