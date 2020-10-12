@@ -1,10 +1,4 @@
-; Copyright (C) 2007 Free Software Foundation, Inc.
-; See the copyright notice in the file /usr/LICENSE.
-; Created by flyan on 2019/11/9.
-; QQ: 1341662010
-; QQ-Group:909830414
-; gitee: https://gitee.com/flyanh/
-;
+
 ; 包含了启动内核的一些信息
 ; 软盘启动/硬盘启动都需要这个文件
 
