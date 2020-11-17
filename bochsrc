@@ -7,8 +7,8 @@
 megs: 256
 
 # BIOS image file and VGA BIOS image file
-romimage:file=/usr/local/share/bochs/BIOS-bochs-latest
-vgaromimage:file=/usr/local/share/bochs/VGABIOS-lgpl-latest
+romimage:file=$BXSHARE/BIOS-bochs-latest
+vgaromimage:file=$BXSHARE/VGABIOS-lgpl-latest
 #romimage:file=/usr/share/bochs/BIOS-bochs-latest
 #vgaromimage:file=/usr/share/bochs/VGABIOS-lgpl-latest
 
@@ -26,7 +26,7 @@ log: log.bochsrc.disk
 mouse: enabled=0
 
 # 键盘映射，我们选用美式键盘为默认
-keyboard: keymap=/usr/local/share/bochs/keymaps/x11-pc-us.map
+keyboard: keymap=$BXSHARE/keymaps/x11-pc-us.map
 
 # enable GUI debugger
 # display_library: x, options=gui_debug
